@@ -79,8 +79,8 @@ def main():
         st.code(BACKEND_URL)
 
     # Main content
-    st.title("Scratch & Dent Detection System")
-    st.markdown("Upload images or videos to detect scratches and dents")
+    st.title("SS Suite - Fault detection Systems")
+    st.markdown("Upload images or videos to detect scratches and dents in the metal surface")
 
     # Tab selection
     tab1, tab2 = st.tabs(["Image Detection", "Video Detection"])
@@ -180,31 +180,13 @@ def main():
                         st.metric("Frames Processed", total_frames)
 
                     if format_type == "video":
-                        st.subheader("Comparison Video")
-                        st.caption("Left: Original frames | Right: Detection results")
+                        st.subheader("Processing Complete")
+                        st.info(
+                            "Comparison video has been generated successfully. Use the download button below to get your results.")
 
-                        # Save video to temporary file and display
-                        try:
-                            # Create a unique temp file
-                            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4', prefix='comparison_')
-                            temp_file.write(result_content)
-                            temp_file.close()
-
-                            # Display video using file path
-                            with open(temp_file.name, 'rb') as video_file:
-                                video_bytes = video_file.read()
-                                st.video(video_bytes)
-
-                            # Clean up temp file
-                            os.unlink(temp_file.name)
-
-                        except Exception as e:
-                            st.error(f"Could not display video: {str(e)}")
-                            st.info("Please use the download button to view the video")
-
-                        # Download button for video
+                        # Download button for video only - no display
                         st.download_button(
-                            label="Download Comparison Video",
+                            label="📥 Download Comparison Video",
                             data=result_content,
                             file_name=f"comparison_video_{session_id}.mp4",
                             mime="video/mp4",
@@ -212,12 +194,12 @@ def main():
                         )
 
                     elif format_type == "zip":
-                        st.subheader("Processed Images")
-                        st.info("ZIP file contains all annotated frames from the video")
+                        st.subheader("Processing Complete")
+                        st.info("ZIP file with annotated frames has been generated successfully.")
 
                         # Download button for ZIP
                         st.download_button(
-                            label="Download ZIP File",
+                            label="📥 Download ZIP File",
                             data=result_content,
                             file_name=f"processed_video_{session_id}.zip",
                             mime="application/zip",
