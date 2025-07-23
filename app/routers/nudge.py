@@ -1,21 +1,16 @@
-import os
 import uuid
-
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse
-
+from fastapi.responses import FileResponse, JSONResponse
 from app.services.model import ScratchDentDetectionService
-
 from app.config.settings import OUTPUT_DIR, UPLOADED_VIDEO_DIR
-UPLOAD_DIR=UPLOADED_VIDEO_DIR
 
+# consider im having this -> from app.config.settings import videos, images # base dirs
 
 model_router = APIRouter()
 service = ScratchDentDetectionService()
 
-
 # Ensure directories exist
-service.ensure_directories_exist(UPLOAD_DIR, OUTPUT_DIR)
+service.ensure_directories_exist(UPLOADED_VIDEO_DIR, OUTPUT_DIR)
 
 
 @model_router.post("/detect-scratch-dent")
@@ -24,28 +19,20 @@ async def detect_scratch_dent(file: UploadFile = File(...)):
     Upload an image and get back annotated image with scratch/dent detection results
     """
     try:
+        # Generate session ID
+        session_id = str(uuid.uuid4())
 
-        # Generate unique filename
-        file_extension = file.filename.split(".")[-1] if "." in file.filename else "jpg"
-        unique_filename = f"{uuid.uuid4()}.{file_extension}"
-
-        # Save uploaded file
-        input_path = os.path.join(UPLOAD_DIR, unique_filename)
-        with open(input_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-
-        # Process image
-        output_filename = f"annotated_{unique_filename}"
-        output_path = os.path.join(OUTPUT_DIR, output_filename)
-
-        processed_path, detection_counts = service.process_image(input_path, output_path)
+        # Process image using service
+        processed_path, detection_counts = await service.process_image_with_session(session_id, file)
 
         # Prepare response data
         response_data = {
             "scratches": detection_counts.get('Scratch', 0),
             "dents": detection_counts.get('Dent', 0)
         }
+
+        # Get output filename for response
+        output_filename = f"annotated_{session_id}.jpg"
 
         # Return file response with headers containing detection counts
         return FileResponse(
@@ -55,16 +42,73 @@ async def detect_scratch_dent(file: UploadFile = File(...)):
             headers={
                 "X-Detection-Data": str(response_data),
                 "X-Scratches": str(response_data["scratches"]),
-                "X-Dents": str(response_data["dents"])
+                "X-Dents": str(response_data["dents"]),
+                "X-Session-ID": session_id
             }
         )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
-    finally:
-        # Clean up uploaded file
-        if 'input_path' in locals() and os.path.exists(input_path):
-            try:
-                os.remove(input_path)
-            except:
-                pass
+
+
+@model_router.post("/detect-scratch-dent-video")
+async def detect_scratch_dent_video(file: UploadFile = File(...)):
+    """
+    Upload a video and get back annotated images with scratch/dent detection results for each frame
+    """
+    try:
+        # Generate session ID
+        session_id = str(uuid.uuid4())
+
+        # Process video using service
+        zip_file_path, detection_results = await service.process_video_with_session(session_id, file)
+
+        # Calculate summary statistics
+        total_scratches = sum(result.get("scratches", 0) for result in detection_results)
+        total_dents = sum(result.get("dents", 0) for result in detection_results)
+        total_frames_processed = len(detection_results)
+
+        # Prepare response headers with summary data
+        response_headers = {
+            "X-Session-ID": session_id,
+            "X-Total-Frames": str(total_frames_processed),
+            "X-Total-Scratches": str(total_scratches),
+            "X-Total-Dents": str(total_dents),
+            "X-Detection-Summary": str({
+                "total_frames": total_frames_processed,
+                "total_scratches": total_scratches,
+                "total_dents": total_dents,
+                "frame_results": detection_results
+            })
+        }
+
+        # Return zip file containing all processed images
+        return FileResponse(
+            path=zip_file_path,
+            media_type="application/zip",
+            filename=f"processed_video_{session_id}.zip",
+            headers=response_headers
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Video processing failed: {str(e)}")
+
+
+@model_router.get("/video-detection-results/{session_id}")
+async def get_video_detection_results(session_id: str):
+    """
+    Get detailed detection results for a video processing session
+    This is a supplementary endpoint to get JSON results if needed
+    """
+    try:
+        # This would typically fetch from a database or cache
+        # For now, return a placeholder response
+        return JSONResponse(
+            content={
+                "session_id": session_id,
+                "message": "Use the main video processing endpoint to get results",
+                "status": "completed"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get results: {str(e)}")

@@ -11,11 +11,14 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 OUTPUT_DIR = BASE_DIR / "app" / "utils" / "images"
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 UPLOADED_VIDEO_DIR = BASE_DIR / "app" / "utils" / "video"
-UPLOADED_VIDEO_DIR.mkdir(exist_ok=True)
+UPLOADED_VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 
+# Create extracted frames directory
+EXTRACTED_FRAMES_DIR = UPLOADED_VIDEO_DIR / "extracted_frames"
+EXTRACTED_FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 
 # API Keys
 ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY")
@@ -27,6 +30,3 @@ LOADED_MODEL = get_model(
                model_id="scratch-dent-lypwi/3",
                api_key=ROBOFLOW_API_KEY
                )
-
-
-
