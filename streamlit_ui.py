@@ -79,7 +79,7 @@ def main():
         st.code(BACKEND_URL)
 
     # Main content
-    st.title("SS Suite - Fault detection Systems")
+    st.title("SS Suite - Defect detection")
     st.markdown("Upload images or videos to detect scratches and dents in the metal surface")
 
     # Tab selection
@@ -87,7 +87,7 @@ def main():
 
     # Image Detection Tab
     with tab1:
-        st.header("Image Analysis")
+        st.header("Metal Image Analysis")
 
         uploaded_image = st.file_uploader(
             "Choose an image file",
@@ -129,11 +129,11 @@ def main():
 
     # Video Detection Tab
     with tab2:
-        st.header("Video Analysis")
+        st.header("Metal Video Analysis")
 
         uploaded_video = st.file_uploader(
             "Choose a video file",
-            type=['mp4', 'avi', 'mov', 'mkv'],
+            type=['mp4'],
             key="video_uploader"
         )
 

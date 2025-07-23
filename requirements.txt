@@ -1,0 +1,28 @@
+# Core ML and Computer Vision
+inference
+opencv-python
+supervision
+numpy
+pillow
+
+# Inference Extensions
+inference[sam]
+inference[clip]
+inference[gaze]
+inference[grounding-dino]
+inference[yolo-world]
+inference[transformers]
+
+# Web Framework and API
+fastapi
+uvicorn[standard]
+python-multipart
+
+# UI and Frontend
+streamlit
+requests
+
+# Utilities
+python-dotenv
+pydantic
+typing-extensions
