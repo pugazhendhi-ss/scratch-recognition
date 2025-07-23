@@ -5,7 +5,7 @@ from typing import Dict, Tuple, List
 from fastapi import UploadFile
 import zipfile
 import tempfile
-from app.config.settings import LOADED_MODEL, OUTPUT_DIR, UPLOADED_VIDEO_DIR
+from app.config.settings import LOADED_MODEL, IMAGES_DIR, VIDEOS_DIR
 
 
 class ScratchDentDetectionService:
@@ -13,8 +13,61 @@ class ScratchDentDetectionService:
         self.model = LOADED_MODEL
         self.bounding_box_annotator = sv.BoxAnnotator()
         self.label_annotator = sv.LabelAnnotator()
-        self.upload_dir = UPLOADED_VIDEO_DIR
-        self.output_dir = OUTPUT_DIR
+
+        # Base directories (assume these are configured in settings)
+        # from app.config.settings import videos, images
+        self.images_base_dir = IMAGES_DIR  # Replace with actual images base dir from settings
+        self.videos_base_dir = VIDEOS_DIR  # Replace with actual videos base dir from settings
+
+    def _create_session_directories(self, session_id: str, is_video: bool = False) -> Dict[str, str]:
+        """
+        Create session-based directory structure
+
+        Args:
+            session_id: Session identifier
+            is_video: Whether this is for video processing
+
+        Returns:
+            Dictionary with directory paths
+        """
+        if is_video:
+            # For videos: videos/session_id_dir/
+            session_base_dir = os.path.join(self.videos_base_dir, session_id)
+            video_upload_dir = session_base_dir
+            uploaded_frames_dir = os.path.join(session_base_dir, "uploaded_frames_dir")
+
+            # For generated frames: videos/session_id_dir/generated_frames_dir/ (FIXED)
+            generated_frames_dir = os.path.join(session_base_dir, "generated_frames_dir")
+
+            directories = {
+                "session_base_dir": session_base_dir,
+                "video_upload_dir": video_upload_dir,
+                "uploaded_frames_dir": uploaded_frames_dir,
+                "generated_frames_dir": generated_frames_dir
+            }
+
+            # Create all directories
+            for dir_path in directories.values():
+                os.makedirs(dir_path, exist_ok=True)
+
+            return directories
+        else:
+            # For images: images/session_id_dir/
+            session_base_dir = os.path.join(self.images_base_dir, session_id)
+            uploaded_images_dir = os.path.join(session_base_dir, "uploaded_images_dir")
+            generated_images_dir = os.path.join(session_base_dir, "generated_images_dir")
+
+            directories = {
+                "session_base_dir": session_base_dir,
+                "uploaded_images_dir": uploaded_images_dir,
+                "generated_images_dir": generated_images_dir
+            }
+
+            # Create all directories
+            for dir_path in directories.values():
+                os.makedirs(dir_path, exist_ok=True)
+
+            return directories
 
     async def process_video_with_session(self, session_id: str, video_file: UploadFile) -> Tuple[str, List[Dict]]:
         """
@@ -27,29 +80,30 @@ class ScratchDentDetectionService:
         Returns:
             Tuple of (zip_file_path, list of detection results for each frame)
         """
-        video_path = None
-        session_folder = None
         try:
             # Validate file type
             if not video_file.content_type.startswith("video/"):
                 raise ValueError("File must be a video")
 
-            # Create session folder for extracted frames
-            session_folder = os.path.join(self.upload_dir, "extracted_frames", session_id)
-            os.makedirs(session_folder, exist_ok=True)
+            # Create session directories
+            directories = self._create_session_directories(session_id, is_video=True)
 
             # Save uploaded video file
             file_extension = video_file.filename.split(".")[
                 -1] if "." in video_file.filename and video_file.filename else "mp4"
             video_filename = f"{session_id}_video.{file_extension}"
-            video_path = os.path.join(self.upload_dir, video_filename)
+            video_path = os.path.join(directories["video_upload_dir"], video_filename)
 
             with open(video_path, "wb") as buffer:
                 content = await video_file.read()
                 buffer.write(content)
 
             # Extract frames from video
-            frame_paths = self._extract_frames_from_video(video_path, session_folder, session_id)
+            frame_paths = self._extract_frames_from_video(
+                video_path,
+                directories["uploaded_frames_dir"],
+                session_id
+            )
 
             # Process each extracted frame
             detection_results = []
@@ -57,7 +111,7 @@ class ScratchDentDetectionService:
 
             for i, frame_path in enumerate(frame_paths):
                 output_filename = f"annotated_frame_{i + 1}_{session_id}.jpg"
-                output_path = os.path.join(self.output_dir, output_filename)
+                output_path = os.path.join(directories["generated_frames_dir"], output_filename)
 
                 try:
                     processed_path, detection_counts = self._process_image_internal(frame_path, output_path)
@@ -79,32 +133,19 @@ class ScratchDentDetectionService:
                         "total_detections": 0
                     })
 
-            # Create zip file with all processed images
-            zip_path = os.path.join(self.output_dir, f"processed_video_{session_id}.zip")
+            # Create zip file with all processed images in the generated_frames_dir
+            zip_path = os.path.join(directories["generated_frames_dir"], f"processed_video_{session_id}.zip")
             with zipfile.ZipFile(zip_path, 'w') as zipf:
                 for frame_path in processed_frame_paths:
                     if os.path.exists(frame_path):
                         zipf.write(frame_path, os.path.basename(frame_path))
+                        print(f"Added to zip: {frame_path}")  # Debug print
+                        print(f"File exists check: {os.path.exists(frame_path)}")  # Debug print
 
             return zip_path, detection_results
 
         except Exception as e:
             raise Exception(f"Error processing video: {str(e)}")
-        finally:
-            # Clean up uploaded video file
-            if video_path and os.path.exists(video_path):
-                try:
-                    os.remove(video_path)
-                except:
-                    pass
-
-            # Clean up extracted frames
-            if session_folder and os.path.exists(session_folder):
-                try:
-                    import shutil
-                    shutil.rmtree(session_folder)
-                except:
-                    pass
 
     def _extract_frames_from_video(self, video_path: str, output_folder: str, session_id: str) -> List[str]:
         """
@@ -112,7 +153,7 @@ class ScratchDentDetectionService:
 
         Args:
             video_path: Path to the video file
-            output_folder: Folder to save extracted frames
+            output_folder: Folder to save extracted frames (uploaded_frames_dir)
             session_id: Session identifier for naming
 
         Returns:
@@ -170,25 +211,27 @@ class ScratchDentDetectionService:
         Returns:
             Tuple of (output_image_path, detection_counts)
         """
-        input_path = None
         try:
             # Validate file type
             if not file.content_type.startswith("image/"):
                 raise ValueError("File must be an image")
 
+            # Create session directories
+            directories = self._create_session_directories(session_id, is_video=False)
+
             # Generate filename with session ID
             file_extension = file.filename.split(".")[-1] if "." in file.filename and file.filename else "jpg"
             input_filename = f"{session_id}_{file.filename}" if file.filename else f"{session_id}.{file_extension}"
 
-            # Save uploaded file
-            input_path = os.path.join(self.upload_dir, input_filename)
+            # Save uploaded file in uploaded_images_dir
+            input_path = os.path.join(directories["uploaded_images_dir"], input_filename)
             with open(input_path, "wb") as buffer:
                 content = await file.read()
                 buffer.write(content)
 
-            # Generate output filename
+            # Generate output filename in generated_images_dir
             output_filename = f"annotated_{session_id}.{file_extension}"
-            output_path = os.path.join(self.output_dir, output_filename)
+            output_path = os.path.join(directories["generated_images_dir"], output_filename)
 
             # Process the image
             processed_path, detection_counts = self._process_image_internal(input_path, output_path)
@@ -197,13 +240,6 @@ class ScratchDentDetectionService:
 
         except Exception as e:
             raise Exception(f"Error processing image: {str(e)}")
-        finally:
-            # Clean up uploaded file
-            if input_path and os.path.exists(input_path):
-                try:
-                    os.remove(input_path)
-                except:
-                    pass
 
     def _process_image_internal(self, input_image_path: str, output_image_path: str) -> Tuple[str, Dict[str, int]]:
         """
@@ -218,6 +254,10 @@ class ScratchDentDetectionService:
         """
 
         try:
+            # Ensure output directory exists
+            output_dir = os.path.dirname(output_image_path)
+            os.makedirs(output_dir, exist_ok=True)
+
             # Load image
             image = cv2.imread(input_image_path)
             if image is None:
@@ -234,7 +274,12 @@ class ScratchDentDetectionService:
             annotated_image = self.label_annotator.annotate(scene=annotated_image, detections=detections)
 
             # Save annotated image
-            cv2.imwrite(output_image_path, annotated_image)
+            success = cv2.imwrite(output_image_path, annotated_image)
+            if not success:
+                raise Exception(f"Failed to save image to {output_image_path}")
+
+            print(f"Successfully saved annotated image to: {output_image_path}")  # Debug print
+            print(f"File exists after save: {os.path.exists(output_image_path)}")  # Debug print
 
             # Count detections by class
             detection_counts = self._count_detections_by_class(results.predictions)
@@ -255,7 +300,7 @@ class ScratchDentDetectionService:
                 class_counts[class_name] = 1
         return class_counts
 
-    def ensure_directories_exist(self, *directories):
-        """Create directories if they don't exist"""
-        for directory in directories:
-            os.makedirs(directory, exist_ok=True)
+    def ensure_base_directories_exist(self):
+        """Create base directories if they don't exist"""
+        os.makedirs(self.images_base_dir, exist_ok=True)
+        os.makedirs(self.videos_base_dir, exist_ok=True)

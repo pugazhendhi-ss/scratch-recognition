@@ -1,16 +1,15 @@
 import uuid
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from app.services.model import ScratchDentDetectionService
-from app.config.settings import OUTPUT_DIR, UPLOADED_VIDEO_DIR
 
 # consider im having this -> from app.config.settings import videos, images # base dirs
 
 model_router = APIRouter()
 service = ScratchDentDetectionService()
 
-# Ensure directories exist
-service.ensure_directories_exist(UPLOADED_VIDEO_DIR, OUTPUT_DIR)
+# Ensure base directories exist
+service.ensure_base_directories_exist()
 
 
 @model_router.post("/detect-scratch-dent")
@@ -92,23 +91,3 @@ async def detect_scratch_dent_video(file: UploadFile = File(...)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Video processing failed: {str(e)}")
-
-
-@model_router.get("/video-detection-results/{session_id}")
-async def get_video_detection_results(session_id: str):
-    """
-    Get detailed detection results for a video processing session
-    This is a supplementary endpoint to get JSON results if needed
-    """
-    try:
-        # This would typically fetch from a database or cache
-        # For now, return a placeholder response
-        return JSONResponse(
-            content={
-                "session_id": session_id,
-                "message": "Use the main video processing endpoint to get results",
-                "status": "completed"
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get results: {str(e)}")
