@@ -1,15 +1,10 @@
 import uuid
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi.responses import FileResponse, JSONResponse
 from app.services.model import ScratchDentDetectionService
-
-# consider im having this -> from app.config.settings import videos, images # base dirs
 
 model_router = APIRouter()
 service = ScratchDentDetectionService()
-
-# Ensure base directories exist
-service.ensure_base_directories_exist()
 
 
 @model_router.post("/detect-scratch-dent")
@@ -51,43 +46,97 @@ async def detect_scratch_dent(file: UploadFile = File(...)):
 
 
 @model_router.post("/detect-scratch-dent-video")
-async def detect_scratch_dent_video(file: UploadFile = File(...)):
+async def detect_scratch_dent_video(
+        file: UploadFile = File(...),
+        output_format: str = Query("zip", regex="^(zip|video)$",
+                                   description="Output format: 'zip' for images or 'video' for side-by-side comparison video")
+):
     """
-    Upload a video and get back annotated images with scratch/dent detection results for each frame
+    Upload a video and get back either:
+    - zip file with annotated images (output_format=zip)
+    - side-by-side comparison video (output_format=video)
     """
     try:
         # Generate session ID
         session_id = str(uuid.uuid4())
 
-        # Process video using service
-        zip_file_path, detection_results = await service.process_video_with_session(session_id, file)
+        if output_format == "video":
+            # Process video and create side-by-side comparison video
+            video_path, detection_results = await service.process_video_with_session_and_create_video(session_id, file)
 
-        # Calculate summary statistics
-        total_scratches = sum(result.get("scratches", 0) for result in detection_results)
-        total_dents = sum(result.get("dents", 0) for result in detection_results)
-        total_frames_processed = len(detection_results)
+            # Calculate summary statistics
+            total_scratches = sum(result.get("scratches", 0) for result in detection_results)
+            total_dents = sum(result.get("dents", 0) for result in detection_results)
+            total_frames_processed = len(detection_results)
 
-        # Prepare response headers with summary data
-        response_headers = {
-            "X-Session-ID": session_id,
-            "X-Total-Frames": str(total_frames_processed),
-            "X-Total-Scratches": str(total_scratches),
-            "X-Total-Dents": str(total_dents),
-            "X-Detection-Summary": str({
-                "total_frames": total_frames_processed,
-                "total_scratches": total_scratches,
-                "total_dents": total_dents,
-                "frame_results": detection_results
-            })
-        }
+            # Prepare response headers with summary data
+            response_headers = {
+                "X-Session-ID": session_id,
+                "X-Total-Frames": str(total_frames_processed),
+                "X-Total-Scratches": str(total_scratches),
+                "X-Total-Dents": str(total_dents),
+                "X-Output-Format": "video",
+                "X-Detection-Summary": str({
+                    "total_frames": total_frames_processed,
+                    "total_scratches": total_scratches,
+                    "total_dents": total_dents,
+                    "frame_results": detection_results
+                })
+            }
 
-        # Return zip file containing all processed images
-        return FileResponse(
-            path=zip_file_path,
-            media_type="application/zip",
-            filename=f"processed_video_{session_id}.zip",
-            headers=response_headers
-        )
+            # Return side-by-side comparison video
+            return FileResponse(
+                path=video_path,
+                media_type="video/mp4",
+                filename=f"comparison_video_{session_id}.mp4",
+                headers=response_headers
+            )
+
+        else:  # output_format == "zip"
+            # Process video using existing service (returns zip)
+            zip_file_path, detection_results = await service.process_video_with_session(session_id, file)
+
+            # Calculate summary statistics
+            total_scratches = sum(result.get("scratches", 0) for result in detection_results)
+            total_dents = sum(result.get("dents", 0) for result in detection_results)
+            total_frames_processed = len(detection_results)
+
+            # Prepare response headers with summary data
+            response_headers = {
+                "X-Session-ID": session_id,
+                "X-Total-Frames": str(total_frames_processed),
+                "X-Total-Scratches": str(total_scratches),
+                "X-Total-Dents": str(total_dents),
+                "X-Output-Format": "zip",
+                "X-Detection-Summary": str({
+                    "total_frames": total_frames_processed,
+                    "total_scratches": total_scratches,
+                    "total_dents": total_dents,
+                    "frame_results": detection_results
+                })
+            }
+
+            # Return zip file containing all processed images
+            return FileResponse(
+                path=zip_file_path,
+                media_type="application/zip",
+                filename=f"processed_video_{session_id}.zip",
+                headers=response_headers
+            )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Video processing failed: {str(e)}")
+
+
+
+@model_router.get("/health")
+async def health_check():
+    """
+    Health check endpoint to verify API is running
+    """
+    return {
+        "status": "healthy",
+        "message": "Scratch & Dent Detection API is running",
+        "timestamp": "2025-01-01T00:00:00Z"
+    }
+

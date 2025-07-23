@@ -1,6 +1,7 @@
 import supervision as sv
 import cv2
 import os
+import numpy as np
 from typing import Dict, Tuple, List
 from fastapi import UploadFile
 import zipfile
@@ -15,9 +16,8 @@ class ScratchDentDetectionService:
         self.label_annotator = sv.LabelAnnotator()
 
         # Base directories (assume these are configured in settings)
-        # from app.config.settings import videos, images
-        self.images_base_dir = IMAGES_DIR  # Replace with actual images base dir from settings
-        self.videos_base_dir = VIDEOS_DIR  # Replace with actual videos base dir from settings
+        self.images_base_dir = IMAGES_DIR
+        self.videos_base_dir = VIDEOS_DIR
 
     def _create_session_directories(self, session_id: str, is_video: bool = False) -> Dict[str, str]:
         """
@@ -36,7 +36,7 @@ class ScratchDentDetectionService:
             video_upload_dir = session_base_dir
             uploaded_frames_dir = os.path.join(session_base_dir, "uploaded_frames_dir")
 
-            # For generated frames: videos/session_id_dir/generated_frames_dir/ (FIXED)
+            # For generated frames: videos/session_id_dir/generated_frames_dir/
             generated_frames_dir = os.path.join(session_base_dir, "generated_frames_dir")
 
             directories = {
@@ -68,6 +68,130 @@ class ScratchDentDetectionService:
                 os.makedirs(dir_path, exist_ok=True)
 
             return directories
+
+    async def process_video_with_session_and_create_video(self, session_id: str, video_file: UploadFile) -> Tuple[
+        str, List[Dict]]:
+        """
+        Process video and create side-by-side comparison video
+
+        Args:
+            session_id: Session identifier
+            video_file: Uploaded video file
+
+        Returns:
+            Tuple of (comparison_video_path, list of detection results for each frame)
+        """
+        try:
+            # First process the video normally to get all frames and detections
+            zip_file_path, detection_results = await self.process_video_with_session(session_id, video_file)
+
+            # Get directories
+            directories = self._create_session_directories(session_id, is_video=True)
+
+            # Create side-by-side comparison video
+            comparison_video_path = await self._create_side_by_side_video(
+                session_id,
+                directories["uploaded_frames_dir"],
+                directories["generated_frames_dir"],
+                directories["session_base_dir"]
+            )
+
+            return comparison_video_path, detection_results
+
+        except Exception as e:
+            raise Exception(f"Error processing video and creating comparison: {str(e)}")
+
+    async def _create_side_by_side_video(self, session_id: str, original_frames_dir: str,
+                                         annotated_frames_dir: str, output_dir: str) -> str:
+        """
+        Create a side-by-side comparison video from original and annotated frames
+
+        Args:
+            session_id: Session identifier
+            original_frames_dir: Directory containing original extracted frames
+            annotated_frames_dir: Directory containing annotated frames
+            output_dir: Directory to save the output video
+
+        Returns:
+            Path to the created comparison video
+        """
+        try:
+            # Get all original and annotated frame files
+            original_frames = sorted([f for f in os.listdir(original_frames_dir) if f.endswith('.jpg')])
+            annotated_frames = sorted(
+                [f for f in os.listdir(annotated_frames_dir) if f.endswith('.jpg') and not f.endswith('.zip')])
+
+            if not original_frames or not annotated_frames:
+                raise ValueError("No frames found for video creation")
+
+            # Setup video writer
+            comparison_video_path = os.path.join(output_dir, f"comparison_video_{session_id}.mp4")
+
+            # Read first frame to get dimensions
+            first_original = cv2.imread(os.path.join(original_frames_dir, original_frames[0]))
+            first_annotated = cv2.imread(os.path.join(annotated_frames_dir, annotated_frames[0]))
+
+            if first_original is None or first_annotated is None:
+                raise ValueError("Could not read frame images")
+
+            # Resize frames to same height if needed
+            height = min(first_original.shape[0], first_annotated.shape[0])
+            width_original = int(first_original.shape[1] * height / first_original.shape[0])
+            width_annotated = int(first_annotated.shape[1] * height / first_annotated.shape[0])
+
+            # Total width for side-by-side
+            total_width = width_original + width_annotated + 10  # 10 pixels gap
+
+            # Video writer setup
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            fps = 2.0  # 2 FPS since we extracted frames every 2 seconds
+            video_writer = cv2.VideoWriter(comparison_video_path, fourcc, fps, (total_width, height))
+
+            # Process each frame pair
+            min_frames = min(len(original_frames), len(annotated_frames))
+
+            for i in range(min_frames):
+                # Read original and annotated frames
+                original_path = os.path.join(original_frames_dir, original_frames[i])
+                annotated_path = os.path.join(annotated_frames_dir, annotated_frames[i])
+
+                original_frame = cv2.imread(original_path)
+                annotated_frame = cv2.imread(annotated_path)
+
+                if original_frame is None or annotated_frame is None:
+                    continue
+
+                # Resize frames
+                original_resized = cv2.resize(original_frame, (width_original, height))
+                annotated_resized = cv2.resize(annotated_frame, (width_annotated, height))
+
+                # Create side-by-side frame
+                side_by_side = np.zeros((height, total_width, 3), dtype=np.uint8)
+                side_by_side[:, :width_original] = original_resized
+                side_by_side[:, width_original + 10:] = annotated_resized
+
+                # Add labels
+                cv2.putText(side_by_side, "Original", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                cv2.putText(side_by_side, "Detected", (width_original + 20, 30), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                            (255, 255, 255), 2)
+
+                # Write frame to video
+                video_writer.write(side_by_side)
+
+                # Hold each frame for 2 seconds (4 additional frames at 2 FPS = 2 seconds)
+                for _ in range(3):
+                    video_writer.write(side_by_side)
+
+            video_writer.release()
+
+            if not os.path.exists(comparison_video_path):
+                raise Exception("Failed to create comparison video")
+
+            print(f"Successfully created comparison video: {comparison_video_path}")
+            return comparison_video_path
+
+        except Exception as e:
+            raise Exception(f"Error creating side-by-side video: {str(e)}")
 
     async def process_video_with_session(self, session_id: str, video_file: UploadFile) -> Tuple[str, List[Dict]]:
         """
@@ -139,8 +263,6 @@ class ScratchDentDetectionService:
                 for frame_path in processed_frame_paths:
                     if os.path.exists(frame_path):
                         zipf.write(frame_path, os.path.basename(frame_path))
-                        print(f"Added to zip: {frame_path}")  # Debug print
-                        print(f"File exists check: {os.path.exists(frame_path)}")  # Debug print
 
             return zip_path, detection_results
 
@@ -277,9 +399,6 @@ class ScratchDentDetectionService:
             success = cv2.imwrite(output_image_path, annotated_image)
             if not success:
                 raise Exception(f"Failed to save image to {output_image_path}")
-
-            print(f"Successfully saved annotated image to: {output_image_path}")  # Debug print
-            print(f"File exists after save: {os.path.exists(output_image_path)}")  # Debug print
 
             # Count detections by class
             detection_counts = self._count_detections_by_class(results.predictions)
